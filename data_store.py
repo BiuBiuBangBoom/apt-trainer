@@ -81,6 +81,7 @@ class DataStore:
         )
 
     def save_record(self, record: Record) -> None:
+        os.makedirs(os.path.dirname(self._file_path), exist_ok=True)
         with open(self._file_path, "a") as f:
             f.write(self._format_record(record) + "\n")
 

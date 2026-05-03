@@ -124,6 +124,7 @@ def do_review(data_store: DataStore) -> None:
 
     ctx = Context(review_config, None)
     ctx.set_strategy(PracticeAndTestMode())
+    assert ctx.strategy is not None
     ctx.strategy.set_question_type(qt)
     ctx.strategy.set_preloaded(questions)
     ctx.execute_strategy()
@@ -171,6 +172,7 @@ def do_weak_training(data_store: DataStore) -> None:
 
         ctx = Context(train_config, data_store)
         ctx.set_strategy(PracticeAndTestMode())
+        assert ctx.strategy is not None
         ctx.strategy.set_question_type(qt)
         ctx.execute_strategy()
 
@@ -241,7 +243,7 @@ def process(config: Config, data_store: DataStore) -> None:
 
 def main() -> None:
     config = parse_args()
-    data_store = DataStore("records.tsv")
+    data_store = DataStore("data/records.tsv")
 
     if config.max_questions > 0:
         print(f"题目数量限制: {config.max_questions}")
