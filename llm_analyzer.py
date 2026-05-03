@@ -7,21 +7,32 @@ from analyzer import Weakness, CrossWeakness
 from data_store import Record
 from mode import Question, question_type_for_name
 
-DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+DEFAULT_MODEL = "deepseek-chat"
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _load_api_key() -> str:
+def _load_settings() -> dict:
     settings_path = os.path.join(_PROJECT_DIR, "settings.json")
     if os.path.exists(settings_path):
         with open(settings_path) as f:
-            settings = json.loads(f.read())
-            key = settings.get("api_key", "")
-            if key:
-                return key
+            return json.loads(f.read())
+    return {}
+
+
+def _load_api_key() -> str:
+    key = _load_settings().get("api_key", "")
+    if key:
+        return key
     return os.environ.get("DEEPSEEK_API_KEY", "")
+
+
+def _load_model() -> str:
+    model = _load_settings().get("model", "")
+    if model:
+        return model
+    return DEFAULT_MODEL
 
 
 SYSTEM_PROMPT = """\
@@ -57,6 +68,25 @@ def _build_feature_catalog() -> str:
     return "\n".join(lines)
 
 
+def _parse_json_response(content: str) -> dict:
+    """Parse JSON from LLM response, handling markdown fences and stray text."""
+    content = content.strip()
+    if not content:
+        raise RuntimeError("LLM 返回了空响应")
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+    # Try to find JSON object boundaries
+    start = content.find("{")
+    end = content.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        content = content[start:end + 1]
+    return json.loads(content)
+
+
 def analyze_with_llm(
     rule_weaknesses: list[Weakness],
     rule_cross: list[CrossWeakness],
@@ -68,14 +98,21 @@ def analyze_with_llm(
 
     prompt = _build_prompt(rule_weaknesses, rule_cross, records)
 
+    # Let the user know the prompt size
+    prompt_bytes = len(prompt.encode("utf-8"))
+    print(f"\n  DeepSeek 模型: {_load_model()}")
+    print(f"  Prompt 大小: {prompt_bytes} 字节 (~{prompt_bytes // 4} tokens)")
+
     body = json.dumps({
-        "model": DEEPSEEK_MODEL,
+        "model": _load_model(),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
         "response_format": {"type": "json_object"},
+        "stream": False,
+        "thinking": {"type": "disabled"},
     }).encode("utf-8")
 
     req = urllib.request.Request(DEEPSEEK_URL, data=body, headers={
@@ -83,14 +120,36 @@ def analyze_with_llm(
         "Authorization": f"Bearer {api_key}",
     })
 
+    print("  正在连接 API...")
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read())
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            print(f"  已连接, 状态码: {resp.status}, 正在读取响应...")
+            raw = bytearray()
+            chunk_size = 4096
+            last_report = 0
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                raw.extend(chunk)
+                if len(raw) - last_report >= 8192:
+                    print(f"  已接收: {len(raw)} 字节...")
+                    last_report = len(raw)
+            print(f"  响应接收完成, 共 {len(raw)} 字节")
+            result = json.loads(raw)
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"DeepSeek API 返回 {e.code} {e.reason}\n响应: {error_body}"
+        ) from e
     except urllib.error.URLError as e:
-        raise RuntimeError(f"DeepSeek API 调用失败: {e}") from e
+        raise RuntimeError(
+            f"DeepSeek API 连接失败: {e.reason}\n"
+            f"请检查网络连接和 API 端点: {DEEPSEEK_URL}"
+        ) from e
 
     content = result["choices"][0]["message"]["content"]
-    return json.loads(content)
+    return _parse_json_response(content)
 
 
 def _build_prompt(
