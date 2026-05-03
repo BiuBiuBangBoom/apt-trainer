@@ -190,16 +190,16 @@ class PowerNumber(QuestionType):
 
 
 MODE_REGISTRY: dict[int, tuple[type[QuestionType], str]] = {
-    1: (TwoDigitsTimesOneDigit, "两位数乘一位数 : 12 * 1"),
-    2: (OneDigitPlusOneDigit, "一位数加一位数 : 1 + 2"),
-    3: (OneDigitTimesOneDigit, "一位数乘一位数 : 1 * 2"),
-    4: (ThreeDigitsDivideTwoDigits, "三位数除以两位数 : 12 厂 123"),
+    1: (TwoDigitsTimesOneDigit, "两位数乘一位数 : 12 × 3"),
+    2: (OneDigitPlusOneDigit, "一位数加一位数 : 8 + 7"),
+    3: (OneDigitTimesOneDigit, "一位数乘一位数 : 7 × 8"),
+    4: (ThreeDigitsDivideTwoDigits, "三位数除以两位数 : 123 ÷ 45"),
     5: (FractionCompare, "分数比较 : 1/2 ? 1/3"),
-    6: (PercentageConvertToFraction, "最近百化分 : 12%"),
-    7: (ThreeDigitsTimesOneDigit, "三位数乘一位数 : 123 * 1"),
-    8: (EstimateGrowth, "估算增长量 : 1234 5.6%"),
-    9: (TwoDigitsSubOneDigit, "两位数减一位数 : 12 - 3"),
-    10: (PowerNumber, "幂次数 : 256"),
+    6: (PercentageConvertToFraction, "最近百化分 : 12.5%"),
+    7: (ThreeDigitsTimesOneDigit, "三位数乘一位数 : 123 × 7"),
+    8: (EstimateGrowth, "估算增长量 : A=1234 r=5.6%"),
+    9: (TwoDigitsSubOneDigit, "两位数减一位数 : 17 − 9"),
+    10: (PowerNumber, "幂次数 : 256 = 4⁴"),
 }
 
 
