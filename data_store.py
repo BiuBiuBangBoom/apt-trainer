@@ -15,6 +15,7 @@ class Record:
     answer: str = ""
     cost_time_ms: int = 0
     is_correct: bool = False
+    meta_json: str = ""
 
 
 @dataclass
@@ -63,6 +64,7 @@ class DataStore:
             self._escape(record.answer),
             str(record.cost_time_ms),
             "1" if record.is_correct else "0",
+            self._escape(record.meta_json),
         ])
 
     def _parse_record(self, line: str) -> Optional[Record]:
@@ -78,6 +80,7 @@ class DataStore:
             answer=self._unescape(fields[5]),
             cost_time_ms=int(fields[6]),
             is_correct=(fields[7] == "1"),
+            meta_json=self._unescape(fields[8]) if len(fields) >= 9 else "",
         )
 
     def save_record(self, record: Record) -> None:

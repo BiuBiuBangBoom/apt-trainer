@@ -151,7 +151,7 @@ def box_line(content: str = "", width: int = WIDTH, align: str = "left",
     inner = width - 4
     vlen = display_width(content)
     if vlen > inner:
-        content = content[:inner]
+        content = _truncate_width(content, inner)
         vlen = inner
     if align == "center":
         left = max(0, (inner - vlen) // 2)
@@ -162,6 +162,51 @@ def box_line(content: str = "", width: int = WIDTH, align: str = "left",
     else:
         padded = f"{content}{' ' * (inner - vlen)}"
     return f"{c_border(v)} {padded} {c_border(v)}"
+
+
+def _truncate_width(s: str, max_width: int) -> str:
+    """Truncate string to fit within max_width display width (CJK-aware)."""
+    result = ""
+    w = 0
+    for ch in re.sub(r"\033\[[0-9;]*m", "", s):
+        cp = ord(ch)
+        ch_w = 2 if (0x4E00 <= cp <= 0x9FFF or
+                      0x3000 <= cp <= 0x303F or
+                      0xFF00 <= cp <= 0xFFEF) else 1
+        if w + ch_w > max_width:
+            break
+        result += ch
+        w += ch_w
+    return result
+
+
+def wrap_text(text: str, max_width: int) -> list[str]:
+    """Wrap text into lines that fit within max_width display width (CJK-aware)."""
+    lines: list[str] = []
+    current = ""
+    cur_w = 0
+
+    for ch in text:
+        if ch == "\n":
+            lines.append(current)
+            current = ""
+            cur_w = 0
+            continue
+        cp = ord(ch)
+        ch_w = 2 if (0x4E00 <= cp <= 0x9FFF or
+                      0x3000 <= cp <= 0x303F or
+                      0xFF00 <= cp <= 0xFFEF) else 1
+        if cur_w + ch_w > max_width:
+            lines.append(current)
+            current = ch
+            cur_w = ch_w
+        else:
+            current += ch
+            cur_w += ch_w
+
+    if current:
+        lines.append(current)
+    return lines if lines else [""]
 
 # ---- Content formatting ----
 

@@ -1,3 +1,4 @@
+import json
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -65,6 +66,7 @@ class Session:
                 answer=r.question.answer,
                 cost_time_ms=r.cost_time_ms,
                 is_correct=self.question_type.check_answer(r.question, r.response),
+                meta_json=json.dumps(r.question.meta, separators=(',', ':')),
             ))
 
     def print_statistics(self) -> None:

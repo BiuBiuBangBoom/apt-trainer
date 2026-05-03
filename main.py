@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Administrative Aptitude Test Assistant — mental math training tool."""
 
+import os
 import sys
 from typing import Optional
 
@@ -14,11 +15,14 @@ from mode import (
     question_type_for_name,
 )
 from strategy import ExamMode, PracticeAndTestMode, PracticeMode
+from analyzer import WeaknessAnalyzer, Weakness, CrossWeakness
+from llm_analyzer import analyze_with_llm, _load_api_key
 from common import (
     bold, dim,
     c_header, c_success, c_error, c_warning, c_accent, c_info, c_border, c_dim,
     box_top, box_bottom, box_sep, box_line,
     colored_accuracy, fmt_time_ms,
+    wrap_text,
     ARROW, WIDTH,
 )
 
@@ -60,7 +64,7 @@ def print_main_menu() -> None:
     print(box_line(""))
     print(box_line(f"{bold('[0]')}  历史统计      {dim('查看历史练习数据')}"))
     print(box_line(f"{bold('[R]')}  错题回顾      {dim('重新练习所有错题')}"))
-    print(box_line(f"{bold('[W]')}  薄弱训练      {dim('针对性强化薄弱题型')}"))
+    print(box_line(f"{bold('[W]')}  智能薄弱分析  {dim('发现弱点并针对性训练')}"))
     print(box_line(""))
     print(box_sep())
     print(box_line(f"{bold('[Q]')}  退出程序"))
@@ -183,27 +187,133 @@ def do_review(data_store: DataStore) -> None:
     ctx.execute_strategy()
 
 
-def do_weak_training(data_store: DataStore) -> None:
-    stats = data_store.get_type_stats()
-    weak = [s for s in stats if s.accuracy < 0.7 and s.total_count >= 5]
+def do_smart_training(data_store: DataStore) -> None:
+    records = data_store.get_all_records()
+    if not records:
+        print(f"\n  {c_success('暂无练习记录')}")
+        return
 
-    if not weak:
-        print(f"\n  {c_success('暂无薄弱题型（正确率均 >= 70% 或练习次数不足）')}")
+    analyzer = WeaknessAnalyzer(records, min_samples=3)
+    type_weaknesses = analyzer.analyze()
+    cross_weaknesses = analyzer.analyze_cross()
+
+    llm_display: list[dict] = []
+    llm_trainable: list[dict] = []  # items with suggested_features for training
+    llm_suggestions = ""
+    if _load_api_key():
+        print(f"\n  {c_dim('正在调用 DeepSeek 进行深度分析...')}")
+        try:
+            llm_result = analyze_with_llm(type_weaknesses, cross_weaknesses, records)
+            for v in llm_result.get("rule_validation", []):
+                if v.get("judgment") == "confirmed":
+                    llm_display.append({
+                        "description": v.get("comment", ""),
+                        "scope": f"{v.get('type_name', '')} - {v.get('feature_name', '')}={v.get('feature_value', '')}",
+                    })
+            for f in llm_result.get("additional_findings", []):
+                desc = f.get("description", "")
+                tn = f.get("type_name", "")
+                sfs = f.get("suggested_features")
+                llm_display.append({"description": desc, "scope": tn})
+                if sfs and isinstance(sfs, dict) and len(sfs) > 0 and tn:
+                    llm_trainable.append({
+                        "type_name": tn,
+                        "features": sfs,
+                        "description": desc,
+                    })
+            llm_suggestions = llm_result.get("training_suggestions", "")
+        except Exception as e:
+            print(f"  {c_error(f'DeepSeek 分析失败: {e}')}")
+
+    has_content = bool(type_weaknesses) or bool(cross_weaknesses) or bool(llm_display) or bool(llm_suggestions)
+    if not has_content:
+        print(f"\n  {c_success('未发现明显薄弱项（数据不足或表现均衡）')}")
         return
 
     print()
-    print(box_top("薄 弱 训 练"))
+    print(box_top("智能薄弱分析报告"))
+    print(box_sep())
+
+    # Index counter for selectable items
+    idx = 0
+
+    if type_weaknesses:
+        print(box_line(""))
+        print(box_line("规则发现 — 题型专项弱点", align="center"))
+        for i, w in enumerate(type_weaknesses, 1):
+            idx = i
+            acc_str = colored_accuracy(w.accuracy)
+            time_str = fmt_time_ms(int(w.avg_time_ms))
+            base_acc_str = colored_accuracy(w.baseline_accuracy)
+            base_time_str = fmt_time_ms(int(w.baseline_time_ms))
+            print(box_line(""))
+            print(box_line(
+                f"  {bold(f'[{i}]')}  {w.type_name}  {w.feature_name}={bold(w.feature_value)}"))
+            print(box_line(
+                f"      正确率: {acc_str} / 均值 {base_acc_str}"))
+            print(box_line(
+                f"      耗时: {time_str} / 均值 {base_time_str}  样本 {w.total_count}题"))
+
+    type_weakness_count = idx
+
+    if cross_weaknesses:
+        print(box_line(""))
+        print(box_sep())
+        print(box_line(""))
+        print(box_line("跨题型弱点", align="center"))
+        for w in cross_weaknesses:
+            idx += 1
+            acc_str = colored_accuracy(w.accuracy)
+            time_str = fmt_time_ms(int(w.avg_time_ms))
+            print(box_line(""))
+            print(box_line(
+                f"  {bold(f'[{idx}]')}  数字 {bold(w.feature_value)} 敏感度低"))
+            print(box_line(
+                f"      正确率: {acc_str}  耗时: {time_str}  样本 {w.total_count}题"))
+            types_str = ', '.join(w.affected_types)
+            for line in wrap_text(f"      涉及: {types_str}", 44):
+                print(box_line(line))
+
+    if llm_trainable:
+        print(box_line(""))
+        print(box_sep())
+        print(box_line(""))
+        print(box_line("AI 发现 — 可训练项目", align="center"))
+        for lt in llm_trainable:
+            idx += 1
+            feats_str = ', '.join(f"{k}={v}" for k, v in lt["features"].items())
+            print(box_line(""))
+            print(box_line(
+                f"  {bold(f'[{idx}]')}  {lt['type_name']}  {feats_str}"))
+            for line in wrap_text(f"      {lt['description']}", 44):
+                print(box_line(line))
+
+    if llm_display:
+        print(box_line(""))
+        print(box_sep())
+        print(box_line(""))
+        print(box_line("AI 深度分析", align="center"))
+        for f in llm_display:
+            print(box_line(""))
+            for line in wrap_text(f["description"], 44):
+                print(box_line(f"  {line}"))
+            if f.get("scope"):
+                for line in wrap_text(dim('范围: ' + f["scope"]), 44):
+                    print(box_line(f"  {line}"))
+    if llm_suggestions:
+        print(box_line(""))
+        print(box_line("训练建议"))
+        for line in wrap_text(llm_suggestions, 44):
+            print(box_line(f"  {line}"))
+
     print(box_line(""))
-    for i, s in enumerate(weak, 1):
-        acc = colored_accuracy(s.accuracy)
-        print(box_line(
-            f"  {bold(f'[{i}]')}  {s.type_name}  "
-            f"正确率: {acc}  ({s.total_count} 次)"))
-    print(box_line(f"  {bold('[0]')}  全部训练"))
-    print(box_line(""))
+    print(box_sep())
+    if type_weaknesses or llm_trainable:
+        print(box_line(f"  {bold('[0]')}  全部训练"))
+    print(box_line(f"  {bold('[Q]')}  返回主菜单"))
     print(box_bottom())
 
-    inp = input(f"  {c_accent(ARROW)} 请选择 [输入 Q 返回]: ").strip()
+    inp = input(f"  {c_accent(ARROW)} 请选择: ").strip()
     if inp.upper() == "Q":
         return
 
@@ -213,30 +323,53 @@ def do_weak_training(data_store: DataStore) -> None:
         print(f"  {c_error('无效选择')}")
         return
 
+    train_items: list[tuple[str, dict[str, str]]] = []
     if sel == 0:
-        to_train = weak
-    elif 1 <= sel <= len(weak):
-        to_train = [weak[sel - 1]]
+        for w in type_weaknesses:
+            train_items.append((w.type_name, {w.feature_name: w.feature_value}))
+        for lt in llm_trainable:
+            train_items.append((lt["type_name"], lt["features"]))
+    elif 1 <= sel <= type_weakness_count:
+        w = type_weaknesses[sel - 1]
+        train_items.append((w.type_name, {w.feature_name: w.feature_value}))
     else:
-        print(f"  {c_error('无效选择')}")
+        # Check llm_trainable
+        llm_start = type_weakness_count + len(cross_weaknesses) + 1
+        lt_idx = sel - llm_start
+        if 0 <= lt_idx < len(llm_trainable):
+            lt = llm_trainable[lt_idx]
+            train_items.append((lt["type_name"], lt["features"]))
+        else:
+            print(f"  {c_error('无效选择')}")
+            return
+
+    if not train_items:
         return
 
-    train_config = Config(max_questions=30)
+    train_config = Config(max_questions=20)
 
-    for ts in to_train:
-        qt = question_type_for_name(ts.type_name)
+    for type_name, features in train_items:
+        qt = question_type_for_name(type_name)
         if qt is None:
             continue
 
+        feats_label = ', '.join(f"{k}={v}" for k, v in features.items())
         print()
-        print(box_top(f"开始训练: {ts.type_name}"))
+        print(box_top(f"针对性训练: {type_name}"))
+        print(box_line(f"{feats_label}", align="center"))
         print(box_line(f"共 {train_config.max_questions} 题", align="center"))
         print(box_bottom())
+
+        questions: list[Question] = []
+        for _ in range(train_config.max_questions):
+            q = qt.generate_question_with_features(features)
+            questions.append(q)
 
         ctx = Context(train_config, data_store)
         ctx.set_strategy(PracticeAndTestMode())
         assert ctx.strategy is not None
         ctx.strategy.set_question_type(qt)
+        ctx.strategy.set_preloaded(questions)
         ctx.execute_strategy()
 
 
@@ -262,7 +395,7 @@ def process(config: Config, data_store: DataStore) -> None:
             continue
 
         if inp.upper() == "W":
-            do_weak_training(data_store)
+            do_smart_training(data_store)
             continue
 
         ctx = Context(config, data_store)

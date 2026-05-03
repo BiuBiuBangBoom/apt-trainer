@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
-data/records.tsv
+data
 .vscode/
 .claude/
+settings.json

@@ -21,6 +21,22 @@ class QuestionType(ABC):
     def check_answer(self, question: Question, response: str) -> bool:
         return response == question.answer
 
+    def extract_features(self, question: Question) -> dict[str, str]:
+        return {}
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        return {"involved_digits": []}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        if "involved_digits" in features:
+            target = features["involved_digits"]
+            for _ in range(200):
+                q = self.generate_question()
+                cross = self.extract_cross_features(q)
+                if target in cross.get("involved_digits", []):
+                    return q
+        return self.generate_question()
+
 
 # ---- Concrete question types ----
 
@@ -30,7 +46,59 @@ class TwoDigitsTimesOneDigit(QuestionType):
     def generate_question(self) -> Question:
         a = random.randint(11, 99)
         b = random.randint(2, 9)
-        return Question(text=f"{a} * {b}", answer=str(a * b))
+        return Question(text=f"{a} * {b}", answer=str(a * b), meta={"a": a, "b": b})
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        ones_carry = 1 if (a % 10) * b >= 10 else 0
+        tens_result = (a // 10) * b + ones_carry
+        tens_carry = 1 if tens_result >= 10 else 0
+        carries = ones_carry + tens_carry
+        product = a * b
+        return {
+            "乘数": str(b),
+            "进位次数": str(carries),
+            "十位数": str(a // 10),
+            "个位数": str(a % 10),
+            "结果位数": str(len(str(product))),
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        return {"involved_digits": [str(a // 10), str(a % 10), str(b)]}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        b_target = features.get("乘数")
+        carries_target = features.get("进位次数")
+        tens_target = features.get("十位数")
+        ones_target = features.get("个位数")
+        digits_target = features.get("结果位数")
+        has_local = any(k in features for k in
+                        {"乘数", "进位次数", "十位数", "个位数", "结果位数"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            a = random.randint(11, 99)
+            b = int(b_target) if b_target else random.randint(2, 9)
+            if tens_target and str(a // 10) != tens_target:
+                continue
+            if ones_target and str(a % 10) != ones_target:
+                continue
+            q = Question(text=f"{a} * {b}", answer=str(a * b), meta={"a": a, "b": b})
+            feats = self.extract_features(q)
+            if carries_target and feats["进位次数"] != carries_target:
+                continue
+            if digits_target and feats["结果位数"] != digits_target:
+                continue
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 class OneDigitPlusOneDigit(QuestionType):
@@ -39,7 +107,48 @@ class OneDigitPlusOneDigit(QuestionType):
     def generate_question(self) -> Question:
         a = random.randint(2, 9)
         b = random.randint(11 - a, 9)
-        return Question(text=f"{a} + {b}", answer=str(a + b))
+        return Question(text=f"{a} + {b}", answer=str(a + b), meta={"a": a, "b": b})
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        return {
+            "加数": str(a),
+            "被加数": str(b),
+            "和的个位": str((a + b) % 10),
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        return {"involved_digits": [str(a), str(b)]}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        a_target = features.get("加数")
+        b_target = features.get("被加数")
+        sum_ones_target = features.get("和的个位")
+        has_local = any(k in features for k in {"加数", "被加数", "和的个位"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            a = int(a_target) if a_target else random.randint(2, 9)
+            if b_target:
+                b = int(b_target)
+                if a + b < 11:
+                    continue
+            else:
+                b = random.randint(11 - a, 9)
+            q = Question(text=f"{a} + {b}", answer=str(a + b), meta={"a": a, "b": b})
+            feats = self.extract_features(q)
+            if sum_ones_target and feats["和的个位"] != sum_ones_target:
+                continue
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 class OneDigitTimesOneDigit(QuestionType):
@@ -48,7 +157,49 @@ class OneDigitTimesOneDigit(QuestionType):
     def generate_question(self) -> Question:
         a = random.randint(1, 9)
         b = random.randint(1, 9)
-        return Question(text=f"{a} * {b}", answer=str(a * b))
+        return Question(text=f"{a} * {b}", answer=str(a * b), meta={"a": a, "b": b})
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        return {
+            "乘数": str(max(a, b)),
+            "被乘数": str(min(a, b)),
+            "积的位数": str(len(str(a * b))),
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        return {"involved_digits": [str(a), str(b)]}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        a_target = features.get("乘数")
+        b_target = features.get("被乘数")
+        digits_target = features.get("积的位数")
+        has_local = any(k in features for k in {"乘数", "被乘数", "积的位数"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            a = random.randint(1, 9)
+            b = random.randint(1, 9)
+            big = max(a, b)
+            small = min(a, b)
+            if a_target and str(big) != a_target:
+                continue
+            if b_target and str(small) != b_target:
+                continue
+            q = Question(text=f"{a} * {b}", answer=str(a * b), meta={"a": a, "b": b})
+            feats = self.extract_features(q)
+            if digits_target and feats["积的位数"] != digits_target:
+                continue
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 class ThreeDigitsDivideTwoDigits(QuestionType):
@@ -66,7 +217,75 @@ class ThreeDigitsDivideTwoDigits(QuestionType):
                 if c in "123456789":
                     answer = c
                     break
-        return Question(text=f"{divisor} 厂 {dividend}", answer=answer)
+        return Question(text=f"{divisor} 厂 {dividend}", answer=answer,
+                        meta={"divisor": divisor, "dividend": dividend})
+
+    def _quotient_first_digit(self, divisor: int, dividend: int) -> str:
+        result = dividend / divisor
+        for c in str(result):
+            if c in "123456789":
+                return c
+        return "0"
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        d = question.meta["divisor"]
+        dd = question.meta["dividend"]
+        if d <= 29:
+            dr = "10-29"
+        elif d <= 59:
+            dr = "30-59"
+        else:
+            dr = "60-99"
+        if dd <= 399:
+            ddr = "100-399"
+        elif dd <= 699:
+            ddr = "400-699"
+        else:
+            ddr = "700-999"
+        return {
+            "除数范围": dr,
+            "商的首位": self._quotient_first_digit(d, dd),
+            "被除数范围": ddr,
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        d = question.meta["divisor"]
+        dd = question.meta["dividend"]
+        digits = []
+        for c in str(d):
+            digits.append(c)
+        for c in str(dd):
+            digits.append(c)
+        return {"involved_digits": digits}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        dr_target = features.get("除数范围")
+        qd_target = features.get("商的首位")
+        ddr_target = features.get("被除数范围")
+        has_local = any(k in features for k in {"除数范围", "商的首位", "被除数范围"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            divisor = random.randint(10, 99)
+            dividend = random.randint(100, 999)
+            if dr_target:
+                lo, hi = {"10-29": (10, 29), "30-59": (30, 59), "60-99": (60, 99)}[dr_target]
+                divisor = random.randint(lo, hi)
+            if ddr_target:
+                lo, hi = {"100-399": (100, 399), "400-699": (400, 699), "700-999": (700, 999)}[ddr_target]
+                dividend = random.randint(lo, hi)
+            qd = self._quotient_first_digit(divisor, dividend)
+            if qd_target and qd != qd_target:
+                continue
+            q = Question(text=f"{divisor} 厂 {dividend}", answer=qd,
+                         meta={"divisor": divisor, "dividend": dividend})
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 class FractionCompare(QuestionType):
@@ -103,10 +322,53 @@ class FractionCompare(QuestionType):
             f"{d1:<10}        {d2:<10}"
         )
         answer = f"({symbol}) {r1} {symbol} {r2}"
-        return Question(text=text, answer=answer)
+        return Question(text=text, answer=answer,
+                        meta={"n1": n1, "n2": n2, "d1": d1, "d2": d2, "symbol": symbol})
 
     def check_answer(self, question: Question, response: str) -> bool:
         return len(response) > 0 and len(question.answer) > 1 and response[0] == question.answer[1]
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        d1 = len(str(question.meta["d1"]))
+        d2 = len(str(question.meta["d2"]))
+        denom_gap = str(abs(d1 - d2))
+        n1 = question.meta["n1"]
+        n2 = question.meta["n2"]
+        d1_val = question.meta["d1"]
+        d2_val = question.meta["d2"]
+        diff = abs(n1 / d1_val - n2 / d2_val)
+        return {
+            "分母位数差": denom_gap,
+            "数值差距": "接近" if diff < 0.05 else "明显",
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        digits = []
+        for key in ("n1", "n2", "d1", "d2"):
+            for c in str(question.meta[key]):
+                digits.append(c)
+        return {"involved_digits": digits}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        denom_gap_target = features.get("分母位数差")
+        gap_target = features.get("数值差距")
+        has_local = any(k in features for k in {"分母位数差", "数值差距"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            q = self.generate_question()
+            feats = self.extract_features(q)
+            if denom_gap_target and feats["分母位数差"] != denom_gap_target:
+                continue
+            if gap_target and feats["数值差距"] != gap_target:
+                continue
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 class PercentageConvertToFraction(QuestionType):
@@ -123,6 +385,7 @@ class PercentageConvertToFraction(QuestionType):
         return Question(
             text=f"{percentage}%",
             answer=f"{best} true value: {target}",
+            meta={"percentage": percentage},
         )
 
     def check_answer(self, question: Question, response: str) -> bool:
@@ -133,6 +396,45 @@ class PercentageConvertToFraction(QuestionType):
         except (ValueError, IndexError):
             return False
 
+    def extract_features(self, question: Question) -> dict[str, str]:
+        p = question.meta["percentage"]
+        if p <= 9.9:
+            pr = "5.0-9.9"
+        elif p <= 14.9:
+            pr = "10.0-14.9"
+        else:
+            pr = "15.0-20.0"
+        return {"百分比范围": pr}
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        p = question.meta["percentage"]
+        digits = [c for c in f"{p:.1f}" if c.isdigit()]
+        return {"involved_digits": digits}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        pr_target = features.get("百分比范围")
+        has_local = "百分比范围" in features
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            if pr_target == "5.0-9.9":
+                p = random.randint(500, 990) / 100.0
+            elif pr_target == "10.0-14.9":
+                p = random.randint(1000, 1490) / 100.0
+            else:
+                p = random.randint(1500, 2000) / 100.0
+            target = 100 / p
+            best = min(self._fractions, key=lambda x: abs(x - target))
+            q = Question(text=f"{p}%", answer=f"{best} true value: {target}",
+                         meta={"percentage": p})
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
+
 
 class ThreeDigitsTimesOneDigit(QuestionType):
     type_name = "三位数乘一位数"
@@ -140,7 +442,59 @@ class ThreeDigitsTimesOneDigit(QuestionType):
     def generate_question(self) -> Question:
         a = random.randint(100, 999)
         b = random.randint(2, 9)
-        return Question(text=f"{a} * {b}", answer=str(a * b))
+        return Question(text=f"{a} * {b}", answer=str(a * b), meta={"a": a, "b": b})
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        hundreds = a // 100
+        tens = (a // 10) % 10
+        ones = a % 10
+        c1 = 1 if ones * b >= 10 else 0
+        c2 = 1 if tens * b + c1 >= 10 else 0
+        c3 = 1 if hundreds * b + c2 >= 10 else 0
+        carries = c1 + c2 + c3
+        product = a * b
+        return {
+            "乘数": str(b),
+            "进位次数": str(carries),
+            "百位数": str(hundreds),
+            "结果位数": str(len(str(product))),
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        digits = [str(a // 100), str((a // 10) % 10), str(a % 10), str(b)]
+        return {"involved_digits": digits}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        b_target = features.get("乘数")
+        carries_target = features.get("进位次数")
+        hundreds_target = features.get("百位数")
+        digits_target = features.get("结果位数")
+        has_local = any(k in features for k in
+                        {"乘数", "进位次数", "百位数", "结果位数"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            a = random.randint(100, 999)
+            b = int(b_target) if b_target else random.randint(2, 9)
+            if hundreds_target and str(a // 100) != hundreds_target:
+                continue
+            q = Question(text=f"{a} * {b}", answer=str(a * b), meta={"a": a, "b": b})
+            feats = self.extract_features(q)
+            if carries_target and feats["进位次数"] != carries_target:
+                continue
+            if digits_target and feats["结果位数"] != digits_target:
+                continue
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 class EstimateGrowth(QuestionType):
@@ -157,7 +511,7 @@ class EstimateGrowth(QuestionType):
         return Question(
             text=f"A: {base}  r: {rate:.2f}",
             answer=f"{result:.2f}",
-            meta={"value": result},
+            meta={"base": base, "rate": rate, "value": result},
         )
 
     def check_answer(self, question: Question, response: str) -> bool:
@@ -170,6 +524,67 @@ class EstimateGrowth(QuestionType):
         print(f"error rate: {error * 100:.2f}%")
         return error <= self._threshold
 
+    def extract_features(self, question: Question) -> dict[str, str]:
+        base = question.meta["base"]
+        rate = question.meta["rate"]
+        if base < 10000:
+            br = "1k-10k"
+        elif base < 100000:
+            br = "10k-100k"
+        else:
+            br = "100k+"
+        if rate <= 6.9:
+            rr = "5.0-6.9"
+        elif rate <= 8.5:
+            rr = "7.0-8.5"
+        else:
+            rr = "8.6-10.0"
+        return {"基数范围": br, "增长率": rr}
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        base = question.meta["base"]
+        rate = question.meta["rate"]
+        digits = [c for c in str(base)]
+        for c in f"{rate:.1f}":
+            if c.isdigit():
+                digits.append(c)
+        return {"involved_digits": digits}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        br_target = features.get("基数范围")
+        rr_target = features.get("增长率")
+        has_local = any(k in features for k in {"基数范围", "增长率"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            if br_target == "1k-10k":
+                base = random.randint(1000, 9999)
+            elif br_target == "10k-100k":
+                base = random.randint(10000, 99999)
+            elif br_target == "100k+":
+                base = random.randint(100000, 200000)
+            else:
+                base = random.randint(1000, 100000)
+            if rr_target == "5.0-6.9":
+                rate = random.randint(50, 69) / 10.0
+            elif rr_target == "7.0-8.5":
+                rate = random.randint(70, 85) / 10.0
+            elif rr_target == "8.6-10.0":
+                rate = random.randint(86, 100) / 10.0
+            else:
+                rate = random.randint(50, 100) / 10.0
+            result = base / (1 + rate / 100) * (rate / 100)
+            q = Question(text=f"A: {base}  r: {rate:.2f}",
+                         answer=f"{result:.2f}",
+                         meta={"base": base, "rate": rate, "value": result})
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
+
 
 class TwoDigitsSubOneDigit(QuestionType):
     type_name = "两位数减一位数"
@@ -177,7 +592,47 @@ class TwoDigitsSubOneDigit(QuestionType):
     def generate_question(self) -> Question:
         a = random.randint(11, 18)
         b = random.randint(a - 9, 9)
-        return Question(text=f"(){a % 10} - {b}", answer=str(a - b))
+        return Question(text=f"(){a % 10} - {b}", answer=str(a - b),
+                        meta={"a": a, "b": b})
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        return {
+            "个位数": str(a % 10),
+            "减数": str(b),
+            "是否退位": "是" if (a % 10) < b else "否",
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        a = question.meta["a"]
+        b = question.meta["b"]
+        return {"involved_digits": [str(a // 10), str(a % 10), str(b)]}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        ones_target = features.get("个位数")
+        b_target = features.get("减数")
+        borrow_target = features.get("是否退位")
+        has_local = any(k in features for k in {"个位数", "减数", "是否退位"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            a = random.randint(11, 18)
+            if ones_target and str(a % 10) != ones_target:
+                continue
+            b = int(b_target) if b_target else random.randint(a - 9, 9)
+            q = Question(text=f"(){a % 10} - {b}", answer=str(a - b),
+                         meta={"a": a, "b": b})
+            feats = self.extract_features(q)
+            if borrow_target and feats["是否退位"] != borrow_target:
+                continue
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 class PowerNumber(QuestionType):
@@ -186,7 +641,53 @@ class PowerNumber(QuestionType):
     def generate_question(self) -> Question:
         base = random.randint(1, 19)
         exp = 3 if base < 10 else 2
-        return Question(text=str(base ** exp), answer=f"{base} {exp}")
+        return Question(text=str(base ** exp), answer=f"{base} {exp}",
+                        meta={"base": base, "exp": exp})
+
+    def extract_features(self, question: Question) -> dict[str, str]:
+        base = question.meta["base"]
+        exp = question.meta["exp"]
+        return {
+            "底数范围": "1-9" if base < 10 else "10-19",
+            "指数": str(exp),
+            "结果位数": str(len(question.text)),
+        }
+
+    def extract_cross_features(self, question: Question) -> dict[str, list[str]]:
+        base = question.meta["base"]
+        exp = question.meta["exp"]
+        digits = [c for c in str(base)]
+        digits.append(str(exp))
+        return {"involved_digits": digits}
+
+    def generate_question_with_features(self, features: dict[str, str]) -> Question:
+        base_range_target = features.get("底数范围")
+        exp_target = features.get("指数")
+        digits_target = features.get("结果位数")
+        has_local = any(k in features for k in {"底数范围", "指数", "结果位数"})
+        if not has_local:
+            return super().generate_question_with_features(features)
+
+        for _ in range(200):
+            if base_range_target == "1-9":
+                base = random.randint(1, 9)
+            elif base_range_target == "10-19":
+                base = random.randint(10, 19)
+            else:
+                base = random.randint(1, 19)
+            exp = 3 if base < 10 else 2
+            if exp_target and str(exp) != exp_target:
+                continue
+            q = Question(text=str(base ** exp), answer=f"{base} {exp}",
+                         meta={"base": base, "exp": exp})
+            if digits_target and str(len(q.text)) != digits_target:
+                continue
+            if "involved_digits" in features:
+                cross = self.extract_cross_features(q)
+                if features["involved_digits"] not in cross.get("involved_digits", []):
+                    continue
+            return q
+        return self.generate_question()
 
 
 MODE_REGISTRY: dict[int, tuple[type[QuestionType], str]] = {
