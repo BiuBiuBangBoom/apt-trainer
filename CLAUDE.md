@@ -2,71 +2,43 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Run
+## 地面规则
+
+- 遇到不确定的需求时，不要自己猜测和决定实现方案，必须先向用户确认。宁可多问一句，也不要自作主张加一个用户不需要的功能。
+
+## 运行
 
 ```bash
 conda activate python313
-python main.py            # normal run
-python main.py -n 20      # limit to 20 questions
-python main.py -t 30      # time limit 30s per question
+python main.py            # 正常运行
+python main.py -n 20      # 限制 20 题
+python main.py -t 30      # 每题限时 30s
 
-python -m unittest test_all -v   # run tests
+python -m unittest test_all -v   # 运行测试
 ```
 
-No external dependencies. Standard library only (Python 3.13).
+## 代码风格
 
-## Architecture
+- Python 3.13，纯标准库，**零外部依赖**
+- 所有函数/方法使用类型标注（含 `Optional`、`list[...]`、`dict[...]`）
+- 数据容器用 `@dataclass`，不写手写 `__init__`
+- 抽象基类继承 `ABC`，`@abstractmethod` 方法体用 `...` 不用 `pass`
+- 内部方法单下划线前缀（`_generator`、`_escape`、`_build_prompt`）
+- 模块级 `__all__` 不需要，导入按需取用
+- import 顺序：标准库 → 本地模块，每组之间空一行
+- 变量命名惯例：`q` = Question, `qt` = QuestionType, `r` = Record, `ds` = DataStore, `feats` = features, `recs` = records
+- 用户可见字符串用中文，代码标识符用英文
+- 默认不写注释；只在 WHY 不明显时才加一行短注释
 
-This is an interactive terminal app for practicing rapid mental math (administrative aptitude test training). It was reconstructed from a C++ project at `../Administrative-Aptitude-Test-Assistant/`.
+## 项目规则
 
-Uses the **Strategy pattern** with two levels of dispatch:
+- `settings.json` 已加入 `.gitignore`，不要提交它
+- `data/` 目录也已忽略，运行期生成的数据不要提交
+- 修改 `QuestionType` 子类时，同步更新 `test_all.py` 中对应的测试
+- `Question` dataclass 的 `meta` 字段是 `dict`，调用方用 `meta.get()` 取值，不要假设 key 一定存在
 
-### Level 1 — Execution mode (how answers are evaluated)
+## 安全红线
 
-`Context` holds an `ExamStrategy` (strategy.py). User picks one at startup:
-
-- **PracticeMode** (`1`) — show answer after each question, no correctness check
-- **PracticeAndTestMode** (`2`) — show answer + correct/wrong per question, summary stats on quit
-- **ExamMode** (`3`) — no feedback until quit, then full summary with stats
-
-### Level 2 — Calculation type (what kind of math)
-
-Each `ExamStrategy` holds a `QuestionType` (mode.py). 10 calculation types:
-
-| # | Class | Display |
-|---|-------|---------|
-| 1 | TwoDigitsTimesOneDigit | 两位数乘一位数 |
-| 2 | OneDigitPlusOneDigit | 一位数加一位数 |
-| 3 | OneDigitTimesOneDigit | 一位数乘一位数 |
-| 4 | ThreeDigitsDivideTwoDigits | 三位数除以两位数 |
-| 5 | FractionCompare | 分数比较 |
-| 6 | PercentageConvertToFraction | 最近百化分 |
-| 7 | ThreeDigitsTimesOneDigit | 三位数乘一位数 |
-| 8 | EstimateGrowth | 现期增长率估算增长量 |
-| 9 | TwoDigitsSubOneDigit | 两位数减一位数 |
-| 10 | PowerNumber | 幂次数 |
-
-### Data flow
-
-1. `main.py` → `process()`: two-level menu (execution mode, then calculation type)
-2. `QuestionType.generate_question()` returns a `Question` dataclass (text + answer + optional meta), no side effects
-3. `Session` manages question generation and response recording via `Session.records: list[SessionRecord]`
-4. User input via `ExamStrategy.process_input()`, which records response + timing into the session
-5. `QuestionType.check_answer(question, response)` compares response to answer (FractionCompare checks only the symbol character, EstimateGrowth checks within 1% threshold)
-6. `Session.print_statistics()` outputs per-question results and aggregate stats
-
-### Key conventions
-
-- `Question` dataclass bundles question text, answer, and optional metadata (e.g. `EstimateGrowth` stores full-precision value in `meta`)
-- `Session` holds a single list of `SessionRecord` (question + response + timing), replacing the old parallel-list design
-- `Session.save_records()` persists to `DataStore`
-- For review mode: preload `Question` objects into `Session` via the `preloaded` parameter; `next_question()` returns `None` when exhausted
-- `common.py` provides ANSI color helpers (`green_str`, `red_str`, `cyan_str`, etc.)
-- `DataStore` persists records to `records.tsv` (tab-separated) with newline/tab escaping
-- `MODE_REGISTRY` in `mode.py` is the single source of truth for mapping selection numbers to type classes and display names
-- `question_type_for_name()` matches by exact `type_name` comparison (not prefix)
-- When adding a new calculation type: subclass `QuestionType`, implement `generate_question()` → `Question`, optionally override `check_answer()`, and add an entry to `MODE_REGISTRY`
-
-## Ground rules
-
-- 遇到不确定的需求时，不要自己猜测和决定实现方案，必须先向用户确认。宁可多问一句，也不要自作主张加一个用户不需要的功能。
+- API key 只通过 `settings.json` 的 `api_key` 字段或环境变量 `DEEPSEEK_API_KEY` 传入，**绝不硬编码**
+- 不要在任何地方 `print` API key
+- LLM 返回内容用于展示，不要直接 eval/exec
