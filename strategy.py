@@ -2,6 +2,7 @@ import json
 import sys
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -34,7 +35,7 @@ class Session:
         self.records: list[SessionRecord] = []
         self._gen = self._generator(preloaded)
 
-    def _generator(self, preloaded):
+    def _generator(self, preloaded: list[Question] | None) -> Generator[Question, None, None]:
         if preloaded is not None:
             yield from preloaded
             return

@@ -208,15 +208,7 @@ class ThreeDigitsDivideTwoDigits(QuestionType):
     def generate_question(self) -> Question:
         divisor = random.randint(10, 99)
         dividend = random.randint(100, 999)
-        if divisor == 0:
-            answer = "0"
-        else:
-            result = dividend / divisor
-            answer = "0"
-            for c in str(result):
-                if c in "123456789":
-                    answer = c
-                    break
+        answer = self._quotient_first_digit(divisor, dividend)
         return Question(text=f"{divisor} 厂 {dividend}", answer=answer,
                         meta={"divisor": divisor, "dividend": dividend})
 
@@ -521,7 +513,6 @@ class EstimateGrowth(QuestionType):
             return False
         expected = question.meta["value"]
         error = abs(expected - resp) / expected if expected != 0 else 0
-        print(f"error rate: {error * 100:.2f}%")
         return error <= self._threshold
 
     def extract_features(self, question: Question) -> dict[str, str]:

@@ -290,6 +290,13 @@ class TestDataStore(unittest.TestCase):
         unescaped = ds._unescape(escaped)
         self.assertEqual(original, unescaped)
 
+    def test_escape_roundtrip_backslash(self):
+        ds = self.DataStore("/tmp/test_records.tsv")
+        original = r"C:\path\to\file"
+        escaped = ds._escape(original)
+        unescaped = ds._unescape(escaped)
+        self.assertEqual(original, unescaped)
+
     def test_format_and_parse_roundtrip(self):
         ds = self.DataStore("/tmp/test_records.tsv")
         r = self.Record(
@@ -316,6 +323,173 @@ class TestDataStore(unittest.TestCase):
         ds = self.DataStore("/tmp/test_records.tsv")
         self.assertIsNone(ds._parse_record(""))
         self.assertIsNone(ds._parse_record("too\tfew\tfields"))
+
+
+class TestExtractFeatures(unittest.TestCase):
+    def test_two_digits_times_one_digit_features(self):
+        qt = TwoDigitsTimesOneDigit()
+        q = Question(text="12 * 3", answer="36", meta={"a": 12, "b": 3})
+        feats = qt.extract_features(q)
+        self.assertEqual(feats["乘数"], "3")
+        self.assertIn("进位次数", feats)
+        self.assertIn("十位数", feats)
+        self.assertIn("个位数", feats)
+        self.assertIn("结果位数", feats)
+
+    def test_one_digit_plus_one_features(self):
+        qt = OneDigitPlusOneDigit()
+        q = Question(text="8 + 7", answer="15", meta={"a": 8, "b": 7})
+        feats = qt.extract_features(q)
+        self.assertEqual(feats["加数"], "8")
+        self.assertEqual(feats["被加数"], "7")
+        self.assertEqual(feats["和的个位"], "5")
+
+    def test_three_digits_divide_two_features(self):
+        qt = ThreeDigitsDivideTwoDigits()
+        q = Question(text="25 厂 500", answer="2", meta={"divisor": 25, "dividend": 500})
+        feats = qt.extract_features(q)
+        self.assertIn("除数范围", feats)
+        self.assertIn("商的首位", feats)
+        self.assertIn("被除数范围", feats)
+        self.assertEqual(feats["商的首位"], "2")
+
+    def test_fraction_compare_features(self):
+        qt = FractionCompare()
+        q = qt.generate_question()
+        feats = qt.extract_features(q)
+        self.assertIn("分母位数差", feats)
+        self.assertIn("数值差距", feats)
+        self.assertIn(feats["数值差距"], ("接近", "明显"))
+
+    def test_percentage_convert_features(self):
+        qt = PercentageConvertToFraction()
+        q = qt.generate_question()
+        feats = qt.extract_features(q)
+        self.assertIn("百分比范围", feats)
+
+    def test_estimate_growth_features(self):
+        qt = EstimateGrowth()
+        q = qt.generate_question()
+        feats = qt.extract_features(q)
+        self.assertIn("基数范围", feats)
+        self.assertIn("增长率", feats)
+
+
+class TestCrossFeatures(unittest.TestCase):
+    def test_cross_features_returns_involved_digits(self):
+        for cls in (TwoDigitsTimesOneDigit, OneDigitPlusOneDigit, OneDigitTimesOneDigit,
+                     ThreeDigitsTimesOneDigit, PowerNumber):
+            qt = cls()
+            q = qt.generate_question()
+            cross = qt.extract_cross_features(q)
+            self.assertIn("involved_digits", cross)
+            self.assertIsInstance(cross["involved_digits"], list)
+            self.assertGreater(len(cross["involved_digits"]), 0)
+
+
+class TestGenerateWithFeatures(unittest.TestCase):
+    def test_two_digits_times_one_with_features(self):
+        qt = TwoDigitsTimesOneDigit()
+        q = qt.generate_question_with_features({"乘数": "7"})
+        self.assertEqual(q.meta["b"], 7)
+
+    def test_one_digit_plus_one_with_features(self):
+        qt = OneDigitPlusOneDigit()
+        q = qt.generate_question_with_features({"加数": "4"})
+        self.assertEqual(q.meta["a"], 4)
+
+    def test_one_digit_times_one_with_features(self):
+        qt = OneDigitTimesOneDigit()
+        q = qt.generate_question_with_features({"乘数": "5"})
+        big = max(q.meta["a"], q.meta["b"])
+        self.assertEqual(big, 5)
+
+    def test_estimate_growth_with_features(self):
+        qt = EstimateGrowth()
+        q = qt.generate_question_with_features({"基数范围": "10k-100k"})
+        self.assertGreaterEqual(q.meta["base"], 10000)
+        self.assertLessEqual(q.meta["base"], 99999)
+
+    def test_power_number_with_features(self):
+        qt = PowerNumber()
+        q = qt.generate_question_with_features({"底数范围": "1-9"})
+        self.assertGreaterEqual(q.meta["base"], 1)
+        self.assertLessEqual(q.meta["base"], 9)
+
+    def test_two_digits_sub_one_with_features(self):
+        qt = TwoDigitsSubOneDigit()
+        q = qt.generate_question_with_features({"是否退位": "是"})
+        feats = qt.extract_features(q)
+        self.assertEqual(feats["是否退位"], "是")
+
+    def test_falls_back_when_no_match(self):
+        qt = TwoDigitsTimesOneDigit()
+        q = qt.generate_question_with_features({"不存在的特征": "值"})
+        self.assertIsInstance(q, Question)
+        self.assertTrue(len(q.text) > 0)
+
+
+class TestWeaknessAnalyzer(unittest.TestCase):
+    def setUp(self):
+        from data_store import Record
+        self.Record = Record
+
+    def _make_record(self, type_name: str, question: str, answer: str,
+                     user_answer: str, cost_ms: int, meta: dict) -> "Record":
+        import json
+        return self.Record(
+            date="2024-01-01 12:00:00",
+            type_name=type_name,
+            mode_name="练习测验模式",
+            question=question,
+            response=user_answer,
+            answer=answer,
+            cost_time_ms=cost_ms,
+            is_correct=(user_answer == answer),
+            meta_json=json.dumps(meta, separators=(',', ':')),
+        )
+
+    def test_analyze_returns_empty_without_enough_samples(self):
+        from analyzer import WeaknessAnalyzer
+        records = [
+            self._make_record("两位数乘一位数", "12 * 3", "36", "36", 1000, {"a": 12, "b": 3}),
+            self._make_record("两位数乘一位数", "15 * 4", "60", "60", 1200, {"a": 15, "b": 4}),
+        ]
+        analyzer = WeaknessAnalyzer(records, min_samples=3)
+        weaknesses = analyzer.analyze()
+        self.assertEqual(weaknesses, [])
+
+    def test_analyze_detects_low_accuracy_feature(self):
+        from analyzer import WeaknessAnalyzer
+        records = []
+        # 80% correct on multiplier 3, 20% correct on multiplier 7
+        for _ in range(5):
+            records.append(self._make_record("两位数乘一位数", "12 * 3", "36", "36", 1000, {"a": 12, "b": 3}))
+        for _ in range(5):
+            records.append(self._make_record("两位数乘一位数", "14 * 7", "98", "0", 3000, {"a": 14, "b": 7}))
+
+        analyzer = WeaknessAnalyzer(records, min_samples=3)
+        weaknesses = analyzer.analyze()
+        self.assertGreater(len(weaknesses), 0)
+        # Should flag multiplier=7 as weak
+        weak_seven = [w for w in weaknesses if w.feature_name == "乘数" and w.feature_value == "7"]
+        self.assertEqual(len(weak_seven), 1)
+
+    def test_analyze_cross_detects_digit_sensitivity(self):
+        from analyzer import WeaknessAnalyzer
+        records = []
+        # Consistently wrong on questions involving digit "7"
+        for _ in range(3):
+            records.append(self._make_record("一位数乘一位数", "7 * 8", "56", "0", 2000, {"a": 7, "b": 8}))
+        for _ in range(5):
+            records.append(self._make_record("一位数乘一位数", "3 * 4", "12", "12", 800, {"a": 3, "b": 4}))
+            records.append(self._make_record("一位数乘一位数", "2 * 5", "10", "10", 900, {"a": 2, "b": 5}))
+
+        analyzer = WeaknessAnalyzer(records, min_samples=3)
+        cross = analyzer.analyze_cross()
+        # Should detect "7" as weak digit
+        digit_seven = [w for w in cross if w.feature_value == "7"]
+        self.assertEqual(len(digit_seven), 1)
 
 
 if __name__ == "__main__":

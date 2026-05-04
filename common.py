@@ -49,6 +49,15 @@ CLOCK = "⏱"
 
 WIDTH = 50
 
+# ---- CJK width helper ----
+
+def _char_width(cp: int) -> int:
+    if (0x4E00 <= cp <= 0x9FFF or
+            0x3000 <= cp <= 0x303F or
+            0xFF00 <= cp <= 0xFFEF):
+        return 2
+    return 1
+
 # ---- Color helpers ----
 
 def green_str(s: str) -> str:
@@ -192,10 +201,7 @@ def wrap_text(text: str, max_width: int) -> list[str]:
             current = ""
             cur_w = 0
             continue
-        cp = ord(ch)
-        ch_w = 2 if (0x4E00 <= cp <= 0x9FFF or
-                      0x3000 <= cp <= 0x303F or
-                      0xFF00 <= cp <= 0xFFEF) else 1
+        ch_w = _char_width(ord(ch))
         if cur_w + ch_w > max_width:
             lines.append(current)
             current = ch

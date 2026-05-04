@@ -42,6 +42,10 @@ class DataStore:
         while i < len(s):
             if s[i] == "\\" and i + 1 < len(s):
                 nxt = s[i + 1]
+                if nxt == "\\":
+                    result.append("\\")
+                    i += 2
+                    continue
                 if nxt == "n":
                     result.append("\n")
                     i += 2

@@ -187,56 +187,62 @@ def do_review(data_store: DataStore) -> None:
     ctx.execute_strategy()
 
 
-def do_smart_training(data_store: DataStore) -> None:
-    records = data_store.get_all_records()
-    if not records:
-        print(f"\n  {c_success('暂无练习记录')}")
-        return
+# ---- Smart training helpers ----
 
-    analyzer = WeaknessAnalyzer(records, min_samples=3)
-    type_weaknesses = analyzer.analyze()
-    cross_weaknesses = analyzer.analyze_cross()
-
+def _llm_analyze(
+    type_weaknesses: list[Weakness],
+    cross_weaknesses: list[CrossWeakness],
+    records: list[Record],
+) -> tuple[list[dict], list[dict], str]:
     llm_display: list[dict] = []
-    llm_trainable: list[dict] = []  # items with suggested_features for training
+    llm_trainable: list[dict] = []
     llm_suggestions = ""
-    if _load_api_key():
-        print(f"\n  {c_dim('正在调用 DeepSeek 进行深度分析...')}")
-        try:
-            llm_result = analyze_with_llm(type_weaknesses, cross_weaknesses, records)
-            for v in llm_result.get("rule_validation", []):
-                if v.get("judgment") == "confirmed":
-                    llm_display.append({
-                        "description": v.get("comment", ""),
-                        "scope": f"{v.get('type_name', '')} - {v.get('feature_name', '')}={v.get('feature_value', '')}",
-                    })
-            for f in llm_result.get("additional_findings", []):
-                desc = f.get("description", "")
-                tn = f.get("type_name", "")
-                sfs = f.get("suggested_features")
-                llm_display.append({"description": desc, "scope": tn})
-                if sfs and isinstance(sfs, dict) and len(sfs) > 0 and tn:
-                    llm_trainable.append({
-                        "type_name": tn,
-                        "features": sfs,
-                        "description": desc,
-                    })
-            llm_suggestions = llm_result.get("training_suggestions", "")
-        except Exception as e:
-            print(f"  {c_error(f'DeepSeek 分析失败: {e}')}")
+    if not _load_api_key():
+        return llm_display, llm_trainable, llm_suggestions
 
+    print(f"\n  {c_dim('正在调用 DeepSeek 进行深度分析...')}")
+    try:
+        llm_result = analyze_with_llm(type_weaknesses, cross_weaknesses, records)
+        for v in llm_result.get("rule_validation", []):
+            if v.get("judgment") == "confirmed":
+                llm_display.append({
+                    "description": v.get("comment", ""),
+                    "scope": f"{v.get('type_name', '')} - {v.get('feature_name', '')}={v.get('feature_value', '')}",
+                })
+        for f in llm_result.get("additional_findings", []):
+            desc = f.get("description", "")
+            tn = f.get("type_name", "")
+            sfs = f.get("suggested_features")
+            llm_display.append({"description": desc, "scope": tn})
+            if sfs and isinstance(sfs, dict) and len(sfs) > 0 and tn:
+                llm_trainable.append({
+                    "type_name": tn,
+                    "features": sfs,
+                    "description": desc,
+                })
+        llm_suggestions = llm_result.get("training_suggestions", "")
+    except Exception as e:
+        print(f"  {c_error(f'DeepSeek 分析失败: {e}')}")
+    return llm_display, llm_trainable, llm_suggestions
+
+
+def _render_weakness_report(
+    type_weaknesses: list[Weakness],
+    cross_weaknesses: list[CrossWeakness],
+    llm_display: list[dict],
+    llm_trainable: list[dict],
+    llm_suggestions: str,
+) -> tuple[int, int] | None:
     has_content = bool(type_weaknesses) or bool(cross_weaknesses) or bool(llm_display) or bool(llm_suggestions)
     if not has_content:
         print(f"\n  {c_success('未发现明显薄弱项（数据不足或表现均衡）')}")
-        return
+        return None
 
     print()
     print(box_top("智能薄弱分析报告"))
     print(box_sep())
 
-    # Index counter for selectable items
     idx = 0
-
     if type_weaknesses:
         print(box_line(""))
         print(box_line("规则发现 — 题型专项弱点", align="center"))
@@ -273,6 +279,8 @@ def do_smart_training(data_store: DataStore) -> None:
             types_str = ', '.join(w.affected_types)
             for line in wrap_text(f"      涉及: {types_str}", 44):
                 print(box_line(line))
+
+    cross_weakness_count = idx - type_weakness_count
 
     if llm_trainable:
         print(box_line(""))
@@ -313,17 +321,23 @@ def do_smart_training(data_store: DataStore) -> None:
     print(box_line(f"  {bold('[Q]')}  返回主菜单"))
     print(box_bottom())
 
-    inp = input(f"  {c_accent(ARROW)} 请选择: ").strip()
-    if inp.upper() == "Q":
-        return
+    return (type_weakness_count, cross_weakness_count)
 
+
+def _parse_smart_selection(
+    inp: str,
+    type_weaknesses: list[Weakness],
+    report_meta: tuple[int, int],
+    llm_trainable: list[dict],
+) -> list[tuple[str, dict[str, str]]] | None:
     try:
         sel = int(inp)
     except ValueError:
-        print(f"  {c_error('无效选择')}")
-        return
+        return None
 
+    type_weakness_count, cross_weakness_count = report_meta
     train_items: list[tuple[str, dict[str, str]]] = []
+
     if sel == 0:
         for w in type_weaknesses:
             train_items.append((w.type_name, {w.feature_name: w.feature_value}))
@@ -333,21 +347,22 @@ def do_smart_training(data_store: DataStore) -> None:
         w = type_weaknesses[sel - 1]
         train_items.append((w.type_name, {w.feature_name: w.feature_value}))
     else:
-        # Check llm_trainable
-        llm_start = type_weakness_count + len(cross_weaknesses) + 1
+        llm_start = type_weakness_count + cross_weakness_count + 1
         lt_idx = sel - llm_start
         if 0 <= lt_idx < len(llm_trainable):
             lt = llm_trainable[lt_idx]
             train_items.append((lt["type_name"], lt["features"]))
         else:
-            print(f"  {c_error('无效选择')}")
-            return
+            return None
 
-    if not train_items:
-        return
+    return train_items if train_items else None
 
+
+def _run_targeted_training(
+    train_items: list[tuple[str, dict[str, str]]],
+    data_store: DataStore,
+) -> None:
     train_config = Config(max_questions=20)
-
     for type_name, features in train_items:
         qt = question_type_for_name(type_name)
         if qt is None:
@@ -373,7 +388,61 @@ def do_smart_training(data_store: DataStore) -> None:
         ctx.execute_strategy()
 
 
-# ---- Main loop ----
+def do_smart_training(data_store: DataStore) -> None:
+    records = data_store.get_all_records()
+    if not records:
+        print(f"\n  {c_success('暂无练习记录')}")
+        return
+
+    analyzer = WeaknessAnalyzer(records, min_samples=3)
+    type_weaknesses = analyzer.analyze()
+    cross_weaknesses = analyzer.analyze_cross()
+
+    llm_display, llm_trainable, llm_suggestions = _llm_analyze(
+        type_weaknesses, cross_weaknesses, records)
+
+    report_meta = _render_weakness_report(
+        type_weaknesses, cross_weaknesses, llm_display, llm_trainable, llm_suggestions)
+    if report_meta is None:
+        return
+
+    inp = input(f"  {c_accent(ARROW)} 请选择: ").strip()
+    if inp.upper() == "Q":
+        return
+
+    train_items = _parse_smart_selection(inp, type_weaknesses, report_meta, llm_trainable)
+    if train_items is None:
+        print(f"  {c_error('无效选择')}")
+        return
+
+    _run_targeted_training(train_items, data_store)
+
+
+# ---- Main loop helpers ----
+
+def _run_strategy_session(ctx: Context) -> None:
+    while True:
+        print_calculation_menu()
+        sub = input(f"  {c_accent(ARROW)} 请选择题型 [1-10, 0/Q 返回]: ").strip()
+
+        if sub == "0" or sub.upper() == "Q" or sub.lower() == "quit":
+            break
+
+        try:
+            sel = int(sub)
+        except ValueError:
+            print(f"  {c_error('无效选择')}")
+            continue
+
+        qt = create_question_type(sel)
+        if qt is None:
+            print(f"  {c_error('无效选择')}")
+            continue
+
+        assert ctx.strategy is not None
+        ctx.strategy.set_question_type(qt)
+        ctx.execute_strategy()
+
 
 def process(config: Config, data_store: DataStore) -> None:
     print_welcome()
@@ -410,27 +479,7 @@ def process(config: Config, data_store: DataStore) -> None:
             print(f"  {c_error('无效选择')}")
             continue
 
-        while True:
-            print_calculation_menu()
-            sub = input(f"  {c_accent(ARROW)} 请选择题型 [1-10, 0/Q 返回]: ").strip()
-
-            if sub == "0" or sub.upper() == "Q" or sub.lower() == "quit":
-                break
-
-            try:
-                sel = int(sub)
-            except ValueError:
-                print(f"  {c_error('无效选择')}")
-                continue
-
-            qt = create_question_type(sel)
-            if qt is None:
-                print(f"  {c_error('无效选择')}")
-                continue
-
-            assert ctx.strategy is not None
-            ctx.strategy.set_question_type(qt)
-            ctx.execute_strategy()
+        _run_strategy_session(ctx)
 
 
 def main() -> None:

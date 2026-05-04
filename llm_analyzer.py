@@ -6,7 +6,7 @@ import urllib.request
 
 from analyzer import Weakness, CrossWeakness
 from data_store import Record
-from mode import Question, question_type_for_name
+from mode import Question, question_type_for_name, MODE_REGISTRY
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
@@ -56,7 +56,6 @@ SYSTEM_PROMPT = """\
 
 def _build_feature_catalog() -> str:
     """Build a catalog of available feature dimensions per question type."""
-    from mode import MODE_REGISTRY
     lines = ["## 可用特征维度（suggested_features 只能使用以下特征名）\n"]
     for num in sorted(MODE_REGISTRY):
         cls, display = MODE_REGISTRY[num]

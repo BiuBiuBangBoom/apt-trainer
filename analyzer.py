@@ -29,6 +29,11 @@ class CrossWeakness:
 
 
 class WeaknessAnalyzer:
+    _ACCURACY_THRESHOLD = 0.15
+    _TIME_RATIO_THRESHOLD = 1.5
+    _CROSS_ACCURACY_THRESHOLD = 0.10
+    _CROSS_TIME_RATIO_THRESHOLD = 1.5
+
     def __init__(self, records: list[Record], min_samples: int = 3):
         self._records = records
         self._min_samples = min_samples
@@ -76,7 +81,7 @@ class WeaknessAnalyzer:
                     continue
                 f_acc = stats["correct"] / cnt
                 f_avg_time = stats["total_time"] / cnt
-                if f_acc < type_accuracy - 0.15 or f_avg_time > type_time * 1.5:
+                if f_acc < type_accuracy - self._ACCURACY_THRESHOLD or f_avg_time > type_time * self._TIME_RATIO_THRESHOLD:
                     weaknesses.append(Weakness(
                         type_name=type_name,
                         feature_name=fname,
@@ -130,7 +135,7 @@ class WeaknessAnalyzer:
                 continue
             d_acc = ds["correct"] / cnt
             d_time = ds["total_time"] / cnt
-            if d_acc < global_accuracy - 0.10 or d_time > global_time * 1.5:
+            if d_acc < global_accuracy - self._CROSS_ACCURACY_THRESHOLD or d_time > global_time * self._CROSS_TIME_RATIO_THRESHOLD:
                 cross_weaknesses.append(CrossWeakness(
                     feature_name="involved_digits",
                     feature_value=digit,
