@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import time
 import urllib.request
 
 from analyzer import Weakness, CrossWeakness
@@ -36,15 +37,19 @@ def _load_model() -> str:
 
 
 SYSTEM_PROMPT = """\
-你是一个数学能力分析专家，擅长从练习数据中发现细微的数字敏感度规律。
+你是一个数学能力分析专家。你会收到一份完整的用户练习数据集（不是抽样）和基于该数据集的规则分析结果。
 
-你会收到用户的规则分析结果和抽样练习记录。请：
-1. 验证规则分析的发现是否合理（judgment: "confirmed"/"questionable"/"false_positive"）
-2. 补充规则分析可能遗漏的规律（如特定的数字组合、顺序效应等）
-3. 给出具体的训练建议（中文，简洁实用）
+你的任务：
+1. 快速验证规则分析的发现与数据是否一致，不要逐条重新计算——规则分析已做了统计，
+   你只需判断这些发现在数据中是否明显成立。简单判断即可，不要纠结精确数字。
+2. 从数据中找出 1-2 条规则分析可能遗漏的数字敏感度规律。
+3. 给出 1-2 句简洁的训练建议（中文，不超过150字）。
 
-注意：补充发现的规律需要用 suggested_features 表达，其中只能使用下文列出的可用特征维度名称，
-不能自创特征名。suggested_features 是一个 dict，可以包含多个特征约束（它们之间是 AND 关系）。
+重要约束：
+- 下文列出的数据就是全部数据，不存在"更大的全量数据集"。不要猜测还有更多数据。
+- suggested_features 只能使用下文"可用特征维度"中列出的特征名，值也必须是该特征的典型取值。
+- 如果规律不便于用现有特征表达，可以省略 suggested_features。
+- 保持简洁，不要在脑中展开长推理。这是结构化 JSON 生成任务，不是深度分析任务。
 
 只返回 JSON，不要任何其他文字。"""
 
@@ -98,21 +103,20 @@ def analyze_with_llm(
 
     prompt = _build_prompt(rule_weaknesses, rule_cross, records)
 
-    # Let the user know the prompt size
     prompt_bytes = len(prompt.encode("utf-8"))
-    print(f"\n  DeepSeek 模型: {_load_model()}")
-    print(f"  Prompt 大小: {prompt_bytes} 字节 (~{prompt_bytes // 4} tokens)")
+    model = _load_model()
 
     body = json.dumps({
-        "model": _load_model(),
+        "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
         "response_format": {"type": "json_object"},
-        "stream": False,
-        "thinking": {"type": "disabled"},
+        "stream": True,
+        "reasoning_effort": "high",
+        "thinking": {"type": "enabled"},
     }).encode("utf-8")
 
     req = urllib.request.Request(DEEPSEEK_URL, data=body, headers={
@@ -120,23 +124,8 @@ def analyze_with_llm(
         "Authorization": f"Bearer {api_key}",
     })
 
-    print("  正在连接 API...")
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            print(f"  已连接, 状态码: {resp.status}, 正在读取响应...")
-            raw = bytearray()
-            chunk_size = 4096
-            last_report = 0
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                raw.extend(chunk)
-                if len(raw) - last_report >= 8192:
-                    print(f"  已接收: {len(raw)} 字节...")
-                    last_report = len(raw)
-            print(f"  响应接收完成, 共 {len(raw)} 字节")
-            result = json.loads(raw)
+        resp = urllib.request.urlopen(req, timeout=300)
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(
@@ -148,7 +137,41 @@ def analyze_with_llm(
             f"请检查网络连接和 API 端点: {DEEPSEEK_URL}"
         ) from e
 
-    content = result["choices"][0]["message"]["content"]
+    content = ""
+    thinking_tokens = 0
+    output_tokens = 0
+    start_time = time.time()
+    try:
+        for line in resp:
+            line_str = line.decode("utf-8", errors="replace").strip()
+            if not line_str or not line_str.startswith("data: "):
+                continue
+            data = line_str[6:]
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            msg_content = delta.get("content", "")
+            reasoning = delta.get("reasoning_content", "")
+            if reasoning:
+                thinking_tokens += len(reasoning) // 2
+            if msg_content:
+                output_tokens += len(msg_content) // 2
+                content += msg_content
+            if reasoning or msg_content:
+                elapsed = int(time.time() - start_time)
+                status = f"  {elapsed}s  |  thinking: {thinking_tokens} tokens  |  output: {output_tokens} tokens"
+                print(f"\r{status}\033[K", end="", flush=True)
+    finally:
+        resp.close()
+
+    print()  # final newline
+    if not content:
+        raise RuntimeError("LLM 返回了空响应")
+
     return _parse_json_response(content)
 
 
@@ -237,25 +260,33 @@ def _build_prompt(
 {
   "rule_validation": [
     {
-      "type_name": "...",
-      "feature_name": "...",
-      "feature_value": "...",
+      "type_name": "题型名",
+      "feature_name": "特征名",
+      "feature_value": "特征值",
       "judgment": "confirmed|questionable|false_positive",
-      "comment": "简短评语"
+      "comment": "一句话"
+    },
+    {
+      "type_name": "跨题型",
+      "feature_name": "数字敏感度",
+      "feature_value": "7",
+      "judgment": "confirmed|questionable|false_positive",
+      "comment": "一句话"
     }
   ],
   "additional_findings": [
     {
-      "description": "发现的规律描述（中文）",
-      "type_name": "该规律对应的题型名称（必须与上方数据统计中的题型名完全一致）",
-      "suggested_features": {"特征名1": "特征值1", "特征名2": "特征值2"}
+      "description": "发现的规律描述（中文，简洁）",
+      "type_name": "题型名",
+      "suggested_features": {"特征名": "特征值"}
     }
   ],
-  "training_suggestions": "训练建议（中文，简洁实用，不超过200字）"
+  "training_suggestions": "训练建议（中文，不超过150字）"
 }
 
-注意：suggested_features 中的 key 必须来自上方"可用特征维度"中列出的特征名，
-value 必须是该特征可能的取值。可以包含多个特征约束（AND 关系）。
-如果规律不便于用现有特征表达，可以省略 suggested_features。""")
+注意：
+- 跨题型弱点用 type_name="跨题型", feature_name="数字敏感度" 的格式
+- 不要重新计算精确统计，判断是否"明显成立"即可
+- suggested_features 可选，不便于表达时可以省略""")
 
     return "\n".join(parts)
